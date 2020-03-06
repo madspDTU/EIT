@@ -98,6 +98,9 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 	private final static String TAG_WIDTH = "width";
 	public final static String TAG_NAME = "name";
 	public final static String TAG_SURFACE = "surface";
+	public final static String TAG_SERVICE = "service";
+	public final static String TAG_LIT = "lit";
+	public final static String TAG_ADVISEDSPEED = "maxspeed:advisory";
 
 
 	public final static String TAG_HIGHWAY = "highway";
@@ -111,7 +114,7 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 			TAG_OSM_ID,
 			TAG_LANES, TAG_LANES_FORWARD, TAG_LANES_BACKWARD, TAG_CYCLEWAY, TAG_CYCLEWAY_RIGHT, TAG_CYCLEWAY_LEFT, TAG_CYCLEWAY_BOTH,
 			TAG_CYCLEWAY_WIDTH, TAG_CYCLEWAY_RIGHT_WIDTH, TAG_CYCLEWAY_LEFT_WIDTH, TAG_WIDTH, TAG_NAME, TAG_SURFACE,
-			TAG_HIGHWAY, TAG_MAXSPEED, TAG_JUNCTION, TAG_ONEWAY, TAG_ACCESS, TAG_BICYCLE));
+			TAG_HIGHWAY, TAG_MAXSPEED, TAG_JUNCTION, TAG_ONEWAY, TAG_ACCESS, TAG_BICYCLE, TAG_SERVICE, TAG_LIT, TAG_ADVISEDSPEED));
 
 	private final Map<Long, OsmNode> nodes = new HashMap<Long, OsmNode>();
 	private final Map<Long, OsmWay> ways = new HashMap<Long, OsmWay>();
@@ -139,6 +142,11 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 	private HashMap<String, Integer> highwayTypes = new HashMap<String, Integer>();
 
 	public HashMap<Integer,LinkedList<Double>> widths = new HashMap<Integer,LinkedList<Double>>();
+
+
+
+
+
 
 	public static Map<Id<Link>, Coordinate[]> nodesMap = new HashMap<Id<Link>, Coordinate[]>();
 
@@ -581,6 +589,10 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 		 */
 
 		//// CREATING CAR-link
+		double numberOfCarLanesForward = 0;
+		double numberOfCarLanesBackward = 0;
+		double maximumAllowedSpeedCar = -1;
+		double advisoryAllowedSpeedCar = -1;
 		if(!nonCarLinkTypes.contains(highway)){
 
 
@@ -626,6 +638,23 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 					}
 				}
 			}
+			String advisedSpeedTag = way.tags.get(TAG_ADVISEDSPEED);
+			if (advisedSpeedTag != null) {
+				try {
+					if(advisedSpeedTag.endsWith("mph")) {
+						advisoryAllowedSpeedCar  = Double.parseDouble(advisedSpeedTag.replace("mph", "").trim()) * 1.609344; // convert mph to m/s
+					} else {
+						advisoryAllowedSpeedCar = Double.parseDouble(advisedSpeedTag); // convert km/h to m/s
+					}
+				} catch (NumberFormatException e) {
+					if (!this.unknownMaxspeedTags.contains(advisedSpeedTag)) {
+						this.unknownMaxspeedTags.add(advisedSpeedTag);
+						log.warn("Could not parse maxspeed tag:" + e.getMessage() + ". Ignoring it.");
+					}
+				}
+			}
+
+			
 
 			// check tag "lanes"
 			String lanesTag = way.tags.get(TAG_LANES);
@@ -714,9 +743,12 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 					this.id++;
 				}
 			}
+			numberOfCarLanesForward = nofLanesForward;
+			numberOfCarLanesBackward = nofLanesBackward;
+			maximumAllowedSpeedCar = freespeed * 3.6;
 		}
 
-		
+
 		////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 		double bicycleWidthRight = -1;
 		double bicycleWidthLeft = -1;
@@ -730,22 +762,26 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 
 			String cycleWay = String.valueOf(way.tags.get(TAG_CYCLEWAY));
 			String cyclewayWidth = String.valueOf(way.tags.get(TAG_CYCLEWAY_WIDTH));
-			
+
 			//EIT
 			String surface = String.valueOf(way.tags.get(TAG_SURFACE));
 			String name = String.valueOf(way.tags.get(TAG_NAME));
-			
+			String service = String.valueOf(way.tags.get(TAG_SERVICE));
+			String lit = String.valueOf(way.tags.get(TAG_LIT ));
+
 			if( "null".equals(cycleWay)){
 				cycleWay = String.valueOf(way.tags.get(TAG_CYCLEWAY_BOTH));
 			}
 
 
-			if(("no".equals(bicycle) || "private".equals(bicycle) || "dismount".equals(bicycle)) &&
-					("null".equals(cycleWay) && "null".equals(cycleWayRight) && "null".equals(cycleWayLeft)) ){
+			
+			///
+			if(("no".equals(bicycle) || "private".equals(bicycle) // || "dismount".equals(bicycle)
+					) && ("null".equals(cycleWay) && "null".equals(cycleWayRight) && "null".equals(cycleWayLeft)) ){
 				return;
 			}
 
-			
+
 			//Note: Medtag flere service-veje.
 			// 
 			// Surface for cyklister.
@@ -759,12 +795,13 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 			// lit = formentligt bare yes / no.
 			// 
 			// tracktype afgør kvaliteten af belægningen af en track.½
-			
-			
+
+
 			//Bus lanes ikke relevant. Måske bedre med busruter anyway.
-			
-			
-			if(("footway".equals(highway) || "service".equals(highway)) && !("yes".equals(bicycle) || "designated".equals(bicycle) ||
+
+
+			if("footway".equals(highway) && "no".equals(bicycle) || "service".equals(highway) && (("no".equals(bicycle) || !"driveway".equals(service)) || 
+					!"designated".equals(bicycle) ||
 					"track".equals(cycleWay) || "lane".equals(cycleWay) ||
 					"track".equals(cycleWayRight) || "lane".equals(cycleWayRight) ||
 					"track".equals(cycleWayLeft) || "lane".equals(cycleWayLeft) ) ){
@@ -882,7 +919,12 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 			//	System.out.println("DEBUG:  <- " + nofLanesBackward + ", -> " + nofLanesForward);
 			//}
 
-
+			if("null".equals(cycleWayRight)) {
+				cycleWayRight = cycleWay;
+			} 
+			if("null".equals(cycleWayLeft)) {
+				cycleWayLeft = cycleWay;
+			} 
 
 			// only create link, if both nodes were found, node could be null, since nodes outside a layer were dropped
 			Id<Node> fromId = Id.create(fromNode.id, Node.class);
@@ -890,81 +932,41 @@ public class FFFOsmNetworkReader implements MatsimSomeReader {
 			if(network.getNodes().get(fromId) != null && network.getNodes().get(toId) != null){
 				String origId = Long.toString(way.id);
 
-				// Forward direction (in relation to the direction of the OSM way object)
-				if (nofLanesForward > 0) {
-					Link l = network.getFactory().createLink(Id.create(this.id + "_" + TransportMode.bike, Link.class), network.getNodes().get(fromId), network.getNodes().get(toId));
-					l.setLength(length);
-					l.setFreespeed(freespeed);
-					l.setCapacity(capacity);
-					l.setNumberOfLanes(nofLanesForward);
-					Set<String> allowedModes = new HashSet<String>();
-					allowedModes.add(TransportMode.bike);
-					l.setAllowedModes(allowedModes);
+				Link l = network.getFactory().createLink(Id.create(this.id + "_" + TransportMode.bike, Link.class), network.getNodes().get(fromId), network.getNodes().get(toId));
+				l.setLength(length);
+				HashSet<String> allowedModes = new HashSet<String>();
+				allowedModes.add(TransportMode.bike);
+				l.setAllowedModes(allowedModes);
+				setAttribute(l,TAG_OSM_ID, origId);
+				setAttribute(l,TAG_HIGHWAY, highway);
+				
+				setAttribute(l, "OpenFor", nofLanesForward > 0 ? "1" : "0");
+				setAttribute(l, "OpenBack", nofLanesBackward > 0 ? "1" : "0");
+				setAttribute(l, "LanesFor", String.valueOf(numberOfCarLanesForward));
+				setAttribute(l, "LanesFor", String.valueOf(numberOfCarLanesForward));
+				setAttribute(l, "MaxSpeed", String.valueOf(maximumAllowedSpeedCar));
+				setAttribute(l, "AdvisedSpeed", String.valueOf(advisoryAllowedSpeedCar));
+				setAttribute(l, "BicycleTypeFor", cycleWayRight);
+				setAttribute(l, "BicycleTypeBack", cycleWayLeft);
+				setAttribute(l, "BicycleWidthFor", String.valueOf(bicycleWidthRight));
+				setAttribute(l, "BicycleWidthBack", String.valueOf(bicycleWidthLeft));
+				setAttribute(l, TAG_SURFACE, surface);
+				setAttribute(l, TAG_NAME, name);
+				setAttribute(l, TAG_SERVICE, service);
+				setAttribute(l, TAG_LIT, lit);
+				
 
-					if(bicycleWidthRight> -1) {
-						int lanes = (int) Math.round(nofLanesForward);
-						widths.get(lanes).add(bicycleWidthRight);
-					}
-
-				//	NetworkUtils.setOrigId(l, origId);
-				//	NetworkUtils.setType(l, highway);
-					setAttribute(l,TAG_OSM_ID, origId);
-					setAttribute(l,TAG_HIGHWAY, highway);
-					setAttribute(l, TAG_SURFACE, surface);
-					setAttribute(l, TAG_NAME, name);
-					
-					Coordinate[] internalNodes = new Coordinate[way.nodes.size()];
-					int i = 0;
-					for(long nodeId : way.nodes) {
-						Coord coord = nodes.get(nodeId).coord;
-						internalNodes[i] = MGC.coord2Coordinate(coord);
-						i++;
-					}
-					nodesMap.put(l.getId(), internalNodes);
-					
-					
-			
-					
-					setOrModifyLinkAttributes(l, way, true);
-					network.addLink(l);
-					this.id++;
+				Coordinate[] internalNodes = new Coordinate[way.nodes.size()];
+				int i = 0;
+				for(long nodeId : way.nodes) {
+					Coord coord = nodes.get(nodeId).coord;
+					internalNodes[i] = MGC.coord2Coordinate(coord);
+					i++;
 				}
-				// Backward/reverse direction (in relation to the direction of the OSM way object)
-				if (nofLanesBackward > 0) {
-					Link l = network.getFactory().createLink(Id.create(this.id + "_" + TransportMode.bike, Link.class), network.getNodes().get(toId), network.getNodes().get(fromId));
-					l.setLength(length);
-					l.setFreespeed(freespeed);
-					l.setCapacity(capacity);
-					l.setNumberOfLanes(nofLanesBackward);
-					Set<String> allowedModes = new HashSet<String>();
-					allowedModes.add(TransportMode.bike);
-					l.setAllowedModes(allowedModes);
+				nodesMap.put(l.getId(), internalNodes);
+				network.addLink(l);
+				this.id++;
 
-					if(bicycleWidthLeft > -1) {
-						int lanes = (int) Math.round(nofLanesBackward);
-						widths.get(lanes).add(bicycleWidthLeft);
-					}
-
-				//	NetworkUtils.setOrigId(l, origId);
-				//	NetworkUtils.setType(l, highway);
-					setAttribute(l,TAG_OSM_ID, origId);
-					setAttribute(l,TAG_HIGHWAY, highway);
-					setAttribute(l, TAG_SURFACE, surface);
-					setAttribute(l, TAG_NAME, name);
-
-					Coordinate[] internalNodes = new Coordinate[way.nodes.size()];
-					int i = way.nodes.size()-1;
-					for(long nodeId : way.nodes) {
-						Coord coord = nodes.get(nodeId).coord;
-						internalNodes[i] = MGC.coord2Coordinate(coord);
-						i--;
-					}
-					nodesMap.put(l.getId(), internalNodes);
-					
-					setOrModifyLinkAttributes(l, way, false);
-					network.addLink(l);
-					this.id++;
-				}
 			}
 
 		}
